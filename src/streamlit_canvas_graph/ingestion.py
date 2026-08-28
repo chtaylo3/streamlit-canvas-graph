@@ -191,17 +191,18 @@ def _store_manifest(
     for package in parsed.packages:
         dependency_id = _store_package(connection, snapshot_id, package)
         by_name[package.name.casefold()] = dependency_id
-        connection.execute(
-            "INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)",
-            [
-                snapshot_id,
-                manifest_id,
-                dependency_id,
-                EdgeType.DEPENDS_ON,
-                package.direct,
-                json.dumps({"source": parsed.parser}),
-            ],
-        )
+        if package.direct:
+            connection.execute(
+                "INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    snapshot_id,
+                    manifest_id,
+                    dependency_id,
+                    EdgeType.DEPENDS_ON,
+                    True,
+                    json.dumps({"source": parsed.parser}),
+                ],
+            )
     for package in parsed.packages:
         source = by_name.get(package.name.casefold())
         if not source:
@@ -301,8 +302,8 @@ def _store_sbom(
             connection, snapshot_id, Package(name, version, ecosystem)
         )
         refs[record.get("SPDXID", "")] = dependency_id
-    document_ids = {
-        relationship.get("spdxElementId")
+    described_ids = {
+        relationship.get("relatedSpdxElement")
         for relationship in sbom.get("relationships", [])
         if relationship.get("relationshipType") == "DESCRIBES"
     }
@@ -311,12 +312,12 @@ def _store_sbom(
             relationship.get("spdxElementId"),
             relationship.get("relatedSpdxElement"),
         )
-        if relationship.get("relationshipType") not in {"DEPENDS_ON", "CONTAINS"}:
+        if relationship.get("relationshipType") != "DEPENDS_ON":
             continue
         target = refs.get(target_ref)
         if not target:
             continue
-        source = refs.get(source_ref, manifest_id if source_ref in document_ids else "")
+        source = refs.get(source_ref)
         if source and source != target:
             connection.execute(
                 "INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)",
@@ -325,7 +326,19 @@ def _store_sbom(
                     source,
                     target,
                     EdgeType.DEPENDS_ON,
-                    source == manifest_id,
+                    False,
+                    json.dumps({"source": "github-spdx"}),
+                ],
+            )
+        if source_ref in described_ids:
+            connection.execute(
+                "INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    snapshot_id,
+                    manifest_id,
+                    target,
+                    EdgeType.DEPENDS_ON,
+                    True,
                     json.dumps({"source": "github-spdx"}),
                 ],
             )

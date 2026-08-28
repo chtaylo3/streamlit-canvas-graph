@@ -96,10 +96,39 @@ def parse_package_lock(path: str, content: str) -> ParsedManifest:
 
 def parse_python_lock(path: str, content: str, parser: str) -> ParsedManifest:
     payload = tomllib.loads(content)
+    records = payload.get("package", [])
+    local_records = {
+        record.get("name"): record
+        for record in records
+        if record.get("name")
+        and isinstance(record.get("source"), dict)
+        and ({"editable", "virtual"} & record["source"].keys())
+    }
+    direct_names: set[str] = set()
+    pending = [
+        dependency.get("name")
+        for record in local_records.values()
+        for dependency in record.get("dependencies", [])
+        if isinstance(dependency, dict) and dependency.get("name")
+    ]
+    seen_local: set[str] = set()
+    while pending:
+        name = pending.pop()
+        if name in local_records:
+            if name in seen_local:
+                continue
+            seen_local.add(name)
+            pending.extend(
+                dependency.get("name")
+                for dependency in local_records[name].get("dependencies", [])
+                if isinstance(dependency, dict) and dependency.get("name")
+            )
+        else:
+            direct_names.add(name)
     packages: list[Package] = []
-    for record in payload.get("package", []):
+    for record in records:
         name, version = record.get("name"), record.get("version")
-        if not name or not version:
+        if not name or not version or name in local_records:
             continue
         dependencies: list[tuple[str, str]] = []
         for dependency in record.get("dependencies", []):
@@ -114,7 +143,7 @@ def parse_python_lock(path: str, content: str, parser: str) -> ParsedManifest:
                 name,
                 str(version),
                 "PyPI",
-                bool(record.get("source", {}).get("editable")),
+                name in direct_names,
                 dependencies,
             )
         )
