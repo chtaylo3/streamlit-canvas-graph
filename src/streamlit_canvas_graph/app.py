@@ -345,7 +345,7 @@ def main() -> None:
                 data_root,
                 dimmed_ids=dimmed_ancestors,
                 emphasized_edges=emphasized_edges,
-                key=f"graph-{snapshot_id}-{focus_id}",
+                key=f"graph-{snapshot_id}",
             )
             if event and event.get("nonce") != st.session_state.get("canvas_nonce"):
                 st.session_state.canvas_nonce = event["nonce"]
