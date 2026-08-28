@@ -13,7 +13,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Streamlit, withStreamlitConnection, type ComponentProps } from "streamlit-component-lib";
+import { Streamlit, type Theme } from "streamlit-component-lib";
 import ELK from "elkjs/lib/elk.bundled.js";
 import "./style.css";
 import { canvasEvent, type CanvasEventKind } from "./events";
@@ -48,7 +48,7 @@ const elk = new ELK();
 async function layout(nodes: CanvasNode[], edges: Edge[]): Promise<CanvasNode[]> {
   const result = await elk.layout({
     id: "root",
-    layoutOptions: { "elk.algorithm": "layered", "elk.direction": "RIGHT", "elk.spacing.nodeNode": "45", "elk.layered.spacing.nodeNodeBetweenLayers": "90" },
+    layoutOptions: { "elk.algorithm": "layered", "elk.direction": "DOWN", "elk.spacing.nodeNode": "45", "elk.layered.spacing.nodeNodeBetweenLayers": "90" },
     children: nodes.map((node) => ({ id: node.id, width: 180, height: 92 })),
     edges: edges.map((edge) => ({ id: edge.id, sources: [edge.source], targets: [edge.target] })),
   });
@@ -56,21 +56,46 @@ async function layout(nodes: CanvasNode[], edges: Edge[]): Promise<CanvasNode[]>
   return nodes.map((node) => ({ ...node, position: positions.get(node.id) ?? node.position }));
 }
 
-function Canvas({ args, disabled, theme }: ComponentProps) {
+type CanvasProps = {
+  args: { nodes?: InputNode[]; edges?: Array<{ source: string; target: string; type: string }> };
+  disabled: boolean;
+  theme?: Theme;
+};
+
+function Canvas({ args, disabled, theme }: CanvasProps) {
   const inputNodes = (args.nodes ?? []) as InputNode[];
   const inputEdges = (args.edges ?? []) as Array<{ source: string; target: string; type: string }>;
   const emit = useCallback((kind: CanvasEventKind, nodeId: string) => Streamlit.setComponentValue(canvasEvent(kind, nodeId)), []);
   const baseNodes = useMemo<CanvasNode[]>(() => inputNodes.map((node) => ({ id: node.id, type: "dependencyNode", position: { x: 0, y: 0 }, data: { ...node, onThumbnail: (id) => emit("thumbnail_select", id) } })), [args.nodes, emit]);
   const edges = useMemo<Edge[]>(() => inputEdges.map((edge, index) => ({ id: `${edge.source}-${edge.target}-${index}`, source: edge.source, target: edge.target, label: edge.type === "depends_on" ? undefined : edge.type, animated: false })), [args.edges]);
-  const [nodes, setNodes] = useState(baseNodes);
-  useEffect(() => { layout(baseNodes, edges).then(setNodes); }, [baseNodes, edges]);
+  const [nodes, setNodes] = useState<CanvasNode[] | null>(null);
+  useEffect(() => {
+    let active = true;
+    setNodes(null);
+    layout(baseNodes, edges).then((laidOut) => {
+      if (active) setNodes(laidOut);
+    });
+    return () => { active = false; };
+  }, [baseNodes, edges]);
   useEffect(() => Streamlit.setFrameHeight(620), []);
   return <div className={`canvas ${theme?.base ?? "light"}`}>
-    <ReactFlowProvider><ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} nodesDraggable={false} nodesConnectable={false} elementsSelectable={!disabled} fitView minZoom={0.15} maxZoom={2.5} onNodeClick={(_, node) => emit("node_select", node.id)} colorMode={theme?.base === "dark" ? "dark" : "light"}>
+    {nodes === null ? <div className="canvas-loading">Laying out dependency graph…</div> : <ReactFlowProvider><ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} nodesDraggable={false} nodesConnectable={false} elementsSelectable={!disabled} fitView minZoom={0.15} maxZoom={2.5} onNodeClick={(_, node) => emit("node_select", node.id)} colorMode={theme?.base === "dark" ? "dark" : "light"}>
       <Background gap={22} size={1} /><Controls /><MiniMap pannable zoomable nodeColor={(node) => ({ account: "#0f172a", repository: "#2563eb", manifest: "#7c3aed", dependency: "#0891b2" }[(node.data as CanvasNodeData).nodeType] ?? "#64748b")} />
-    </ReactFlow></ReactFlowProvider>
+    </ReactFlow></ReactFlowProvider>}
   </div>;
 }
 
-const ConnectedCanvas = withStreamlitConnection(Canvas);
+type RenderData = { args: CanvasProps["args"]; disabled: boolean; theme?: Theme };
+
+function ConnectedCanvas() {
+  const [renderData, setRenderData] = useState<RenderData | null>(null);
+  useEffect(() => {
+    const onRender = (event: Event) => setRenderData((event as CustomEvent<RenderData>).detail);
+    Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
+    Streamlit.setComponentReady();
+    return () => Streamlit.events.removeEventListener(Streamlit.RENDER_EVENT, onRender);
+  }, []);
+  return renderData ? <Canvas {...renderData} /> : <div className="canvas-loading">Connecting to Streamlit…</div>;
+}
+
 createRoot(document.getElementById("root")!).render(<React.StrictMode><ConnectedCanvas /></React.StrictMode>);
