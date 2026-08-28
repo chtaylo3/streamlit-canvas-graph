@@ -185,8 +185,9 @@ def provision(
     name = destination_name(prefix, check.entry)
     try:
         client.repository(f"{owner}/{name}")
-    except GitHubError:
-        pass
+    except GitHubError as exc:
+        if exc.status_code != 404:
+            raise
     else:
         raise ValueError(f"Destination already exists: {owner}/{name}")
     created = client.create_private_repository(
@@ -224,16 +225,21 @@ def cleanup(
 ) -> list[str]:
     payload = _read_manifest(manifest_path)
     allowed = {
-        row["destination_full_name"]
+        row["destination_full_name"]: row["destination_id"]
         for row in payload["repositories"]
         if not row.get("removed_at")
     }
-    if not full_names <= allowed:
+    if not full_names <= allowed.keys():
         raise ValueError(
             "Cleanup requested a repository not present as active in the local provisioning manifest"
         )
     removed_at = datetime.now(UTC).isoformat()
     for full_name in sorted(full_names):
+        current = client.repository(full_name)
+        if current.get("id") != allowed[full_name]:
+            raise ValueError(
+                f"Repository identity changed; refusing to delete {full_name}"
+            )
         client.delete_repository(full_name)
         for row in payload["repositories"]:
             if row["destination_full_name"] == full_name and not row.get("removed_at"):

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import stat
+import warnings
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -39,11 +41,13 @@ def _absolute(value: str | Path) -> Path:
 @lru_cache(maxsize=1)
 def get_config() -> AppConfig:
     """Load tracked defaults, ignored secrets, and SCG_* environment overrides."""
+    secrets_path = PROJECT_ROOT / ".secrets.toml"
+    _warn_insecure_secret_permissions(secrets_path)
     settings = Dynaconf(
         envvar_prefix="SCG",
         settings_files=[
             str(PROJECT_ROOT / "settings.toml"),
-            str(PROJECT_ROOT / ".secrets.toml"),
+            str(secrets_path),
         ],
         environments=False,
         load_dotenv=True,
@@ -84,6 +88,18 @@ def _secret(settings: Dynaconf, key: str, *, legacy_env: str) -> str | None:
     if not value or str(value).endswith("replace_me") or "replace_me_" in str(value):
         return None
     return str(value)
+
+
+def _warn_insecure_secret_permissions(path: Path) -> None:
+    """Warn when another local user could read or replace the secrets file."""
+    if os.name != "posix" or not path.exists():
+        return
+    if stat.S_IMODE(path.stat().st_mode) & (stat.S_IRWXG | stat.S_IRWXO):
+        warnings.warn(
+            f"{path} is accessible by group or other users; run chmod 600 {path}",
+            UserWarning,
+            stacklevel=2,
+        )
 
 
 def reload_config() -> AppConfig:

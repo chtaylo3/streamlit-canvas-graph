@@ -23,6 +23,9 @@ class FakeClient:
     def delete_repository(self, full_name: str) -> None:
         self.deleted.append(full_name)
 
+    def repository(self, full_name: str) -> dict[str, object]:
+        return {"id": 123, "full_name": full_name}
+
 
 def test_catalog_has_four_defaults_per_ecosystem() -> None:
     entries = load_catalog(Path("config/test-repositories.toml"))
@@ -54,7 +57,11 @@ def test_cleanup_is_allowlisted_by_local_manifest(tmp_path) -> None:
             {
                 "version": 1,
                 "repositories": [
-                    {"destination_full_name": "me/allowed", "removed_at": None}
+                    {
+                        "destination_id": 123,
+                        "destination_full_name": "me/allowed",
+                        "removed_at": None,
+                    }
                 ],
             }
         )
@@ -64,6 +71,30 @@ def test_cleanup_is_allowlisted_by_local_manifest(tmp_path) -> None:
     assert client.deleted == ["me/allowed"]
     with pytest.raises(ValueError):
         cleanup(client, path, {"me/not-allowed"})
+
+
+def test_cleanup_refuses_reused_repository_name(tmp_path) -> None:
+    path = tmp_path / "repositories.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "repositories": [
+                    {
+                        "destination_id": 456,
+                        "destination_full_name": "me/reused",
+                        "removed_at": None,
+                    }
+                ],
+            }
+        )
+    )
+    client = FakeClient()
+
+    with pytest.raises(ValueError, match="identity changed"):
+        cleanup(client, path, {"me/reused"})
+
+    assert client.deleted == []
 
 
 def test_ambiguous_github_license_is_verified_from_content() -> None:
@@ -94,7 +125,7 @@ def test_provision_disables_actions_before_copy_and_rolls_back_interrupt(
 
     class ProvisionClient:
         def repository(self, _full_name: str) -> None:
-            raise GitHubError("not found")
+            raise GitHubError("not found", status_code=404)
 
         def create_private_repository(self, _name: str, _description: str) -> dict:
             events.append("create")
