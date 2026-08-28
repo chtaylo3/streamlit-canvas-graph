@@ -1,0 +1,8 @@
+# Non-secret defaults. Override with SCG_* environment variables or .secrets.toml.
+data_dir = "data/demo"
+database = ""
+github_output_dir = "data/github"
+repository_catalog = "config/test-repositories.toml"
+provisioning_manifest = "data/provisioning/repositories.json"
+provisioning_prefix = "scg-test"
+

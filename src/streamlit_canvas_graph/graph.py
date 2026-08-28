@@ -1,0 +1,120 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import duckdb
+import networkx as nx
+
+
+def load_graph(connection: duckdb.DuckDBPyConnection, snapshot_id: str) -> nx.DiGraph:
+    graph = nx.DiGraph()
+    for row in connection.execute(
+        "SELECT node_id, node_type, name, ecosystem, version, metadata FROM nodes "
+        "WHERE snapshot_id = ?",
+        [snapshot_id],
+    ).fetchall():
+        graph.add_node(
+            row[0],
+            node_type=row[1],
+            name=row[2],
+            ecosystem=row[3],
+            version=row[4],
+            metadata=json.loads(row[5]) if isinstance(row[5], str) else (row[5] or {}),
+        )
+    for row in connection.execute(
+        "SELECT source_id, target_id, edge_type, is_direct FROM edges WHERE snapshot_id = ?",
+        [snapshot_id],
+    ).fetchall():
+        graph.add_edge(row[0], row[1], edge_type=row[2], is_direct=row[3])
+    return graph
+
+
+def bounded_neighborhood(
+    graph: nx.DiGraph,
+    focus_id: str | None,
+    *,
+    ancestors: int = 2,
+    descendants: int = 1,
+    limit: int = 500,
+) -> tuple[nx.DiGraph, int]:
+    if not graph:
+        return graph.copy(), 0
+    if not focus_id or focus_id not in graph:
+        roots = [node for node, degree in graph.in_degree() if degree == 0]
+        visible = set(roots)
+        for root in roots:
+            visible.update(_bfs_nodes(graph, root, descendants))
+    else:
+        visible = {focus_id}
+        visible.update(_bfs_nodes(graph.reverse(copy=False), focus_id, ancestors))
+        visible.update(_bfs_nodes(graph, focus_id, descendants))
+    ranked = sorted(
+        visible,
+        key=lambda node: (
+            node != focus_id,
+            graph.nodes[node].get("node_type") == "dependency",
+            graph.nodes[node].get("name", "").lower(),
+        ),
+    )
+    selected = ranked[:limit]
+    return graph.subgraph(selected).copy(), max(0, len(visible) - len(selected))
+
+
+def _bfs_nodes(graph: nx.DiGraph, source: str, depth: int) -> set[str]:
+    result: set[str] = set()
+    seen = {source}
+    frontier = {source}
+    for _ in range(depth):
+        next_frontier: set[str] = set()
+        for node in frontier:
+            for neighbor in graph.successors(node):
+                if neighbor not in seen:
+                    seen.add(neighbor)
+                    result.add(neighbor)
+                    next_frontier.add(neighbor)
+        frontier = next_frontier
+        if not frontier:
+            break
+    return result
+
+
+def node_metrics(
+    connection: duckdb.DuckDBPyConnection, snapshot_id: str, node_id: str
+) -> dict[str, dict[str, int]]:
+    result: dict[str, dict[str, int]] = {}
+    for dimension, category, count in connection.execute(
+        "SELECT dimension, category, count FROM ring_metrics "
+        "WHERE snapshot_id = ? AND node_id = ?",
+        [snapshot_id, node_id],
+    ).fetchall():
+        result.setdefault(dimension, {})[category] = count
+    return result
+
+
+def vulnerabilities_for_node(
+    connection: duckdb.DuckDBPyConnection, snapshot_id: str, node_id: str
+) -> list[dict[str, Any]]:
+    cursor = connection.execute(
+        """
+        WITH RECURSIVE descendants(id) AS (
+            SELECT ? UNION SELECT e.target_id FROM edges e
+            JOIN descendants d ON e.source_id = d.id WHERE e.snapshot_id = ?
+        )
+        SELECT v.advisory_id, n.name AS package, n.version, v.severity, v.cvss,
+               v.summary, v.fixed_version, v.advisory_url
+        FROM vulnerabilities v JOIN nodes n
+          ON n.snapshot_id = v.snapshot_id AND n.node_id = v.dependency_id
+        WHERE v.snapshot_id = ? AND v.dependency_id IN (SELECT id FROM descendants)
+        ORDER BY CASE v.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1
+                 WHEN 'medium' THEN 2 ELSE 3 END, v.cvss DESC
+        """,
+        [node_id, snapshot_id, snapshot_id],
+    )
+    columns = [description[0] for description in cursor.description]
+    return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
+
+def thumbnail_path(data_root: Path, node_id: str) -> Path:
+    return data_root / "thumbnails" / f"{node_id}.png"
