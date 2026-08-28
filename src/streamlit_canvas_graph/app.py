@@ -13,8 +13,12 @@ from streamlit_canvas_graph.canvas import canvas_available, dependency_canvas
 from streamlit_canvas_graph.database import create_demo_dataset, snapshot_rows
 from streamlit_canvas_graph.graph import (
     bounded_neighborhood,
+    breadcrumb_path,
+    emphasized_context_edges,
     load_graph,
     node_metrics,
+    repository_scope,
+    scoped_explore_paths,
     thumbnail_path,
     vulnerabilities_for_node,
 )
@@ -28,6 +32,19 @@ TYPE_COLORS = {
     "repository": "#2563eb",
     "manifest": "#7c3aed",
     "dependency": "#0891b2",
+}
+EXPLORE_LABELS = {
+    "repository": "Repositories",
+    "manifest": "Manifests",
+    "dependency": "Dependencies",
+    "account": "Accounts",
+    "all": "All nodes",
+}
+NEXT_EXPLORE_TYPE = {
+    "account": "repository",
+    "repository": "manifest",
+    "manifest": "dependency",
+    "dependency": "dependency",
 }
 
 
@@ -133,10 +150,39 @@ def ring_figure(metrics: dict[str, dict[str, int]]) -> go.Figure:
     return figure
 
 
-def select_node(node_id: str, *, panel: str = "metadata") -> None:
+def select_node(
+    node_id: str,
+    *,
+    panel: str = "metadata",
+    node_type: str | None = None,
+    repository_id: str | None = None,
+) -> None:
     st.session_state.focus_id = node_id
     st.session_state.selected_id = node_id
     st.session_state.panel = panel
+    if node_type in NEXT_EXPLORE_TYPE:
+        st.session_state.pending_explore_type = NEXT_EXPLORE_TYPE[node_type]
+    if repository_id is not None:
+        st.session_state.current_repository = repository_id
+
+
+def explore_path_label(
+    graph: nx.DiGraph, node_id: str, path: tuple[str, ...], node_type: str
+) -> str:
+    def label(node: str) -> str:
+        data = graph.nodes[node]
+        if data["node_type"] == "manifest":
+            return data.get("metadata", {}).get("path") or data["name"]
+        if data["node_type"] == "dependency" and data.get("version"):
+            return f"{data['name']}@{data['version']}"
+        return data["name"]
+
+    names = [label(node) for node in path]
+    if node_type == "dependency" and len(names) > 4:
+        names = [names[0], "…", *names[-2:]]
+    if node_type in {"dependency", "all"} and len(names) > 1:
+        return "  →  ".join(names)
+    return f"{label(node_id)} · {graph.nodes[node_id]['node_type']}"
 
 
 def render_details(
@@ -192,7 +238,7 @@ def main() -> None:
     if not snapshots:
         st.warning("This database contains no snapshots.")
         return
-    controls = st.columns([2, 3, 1])
+    controls = st.columns([2, 1.4, 3, 1])
     labels = {
         row["snapshot_id"]: f"{row['captured_at']:%Y-%m-%d %H:%M} · {row['source']}"
         for row in snapshots
@@ -201,30 +247,91 @@ def main() -> None:
         "Snapshot", list(labels), format_func=labels.get
     )
     graph = graph_for_snapshot(str(db_path), snapshot_id)
-    search_options = sorted(graph, key=lambda node: graph.nodes[node]["name"].lower())
-    search = controls[1].selectbox(
-        "Jump to node",
-        [None, *search_options],
-        format_func=lambda node: (
-            "Search all nodes…"
-            if node is None
-            else f"{graph.nodes[node]['name']} · {graph.nodes[node]['node_type']}"
-        ),
-    )
-    if search and search != st.session_state.get("selected_id"):
-        select_node(search)
-    if controls[2].button("Refresh data", use_container_width=True):
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        st.rerun()
     focus_id = st.session_state.get("focus_id")
     if focus_id not in graph:
         focus_id = next(
             (node for node in graph if graph.nodes[node]["node_type"] == "account"),
             next(iter(graph)),
         )
-        select_node(focus_id)
+        select_node(focus_id, node_type=graph.nodes[focus_id]["node_type"])
+    current_repository = repository_scope(
+        graph, focus_id, st.session_state.get("current_repository")
+    )
+    if current_repository is not None:
+        st.session_state.current_repository = current_repository
+    if pending_type := st.session_state.pop("pending_explore_type", None):
+        st.session_state.explore_type = pending_type
+    st.session_state.setdefault("explore_type", "repository")
+    explore_type = controls[1].selectbox(
+        "Explore",
+        list(EXPLORE_LABELS),
+        format_func=EXPLORE_LABELS.get,
+        key="explore_type",
+    )
+    explore_paths = scoped_explore_paths(graph, explore_type, current_repository)
+    search_options = sorted(
+        explore_paths,
+        key=lambda node: explore_path_label(
+            graph, node, explore_paths[node], explore_type
+        ).casefold(),
+    )
+    valid_search_values = {None, *search_options}
+    if st.session_state.get("jump_to_node") not in valid_search_values:
+        st.session_state.jump_to_node = None
+
+    def jump_to_selected_node() -> None:
+        node_id = st.session_state.get("jump_to_node")
+        if node_id in graph:
+            select_node(
+                node_id,
+                node_type=graph.nodes[node_id]["node_type"],
+                repository_id=repository_scope(
+                    graph, node_id, st.session_state.get("current_repository")
+                ),
+            )
+
+    controls[2].selectbox(
+        "Jump to node",
+        [None, *search_options],
+        format_func=lambda node: (
+            f"Search {EXPLORE_LABELS[explore_type].lower()}…"
+            if node is None
+            else explore_path_label(graph, node, explore_paths[node], explore_type)
+        ),
+        key="jump_to_node",
+        on_change=jump_to_selected_node,
+    )
+    if controls[3].button("Refresh data", use_container_width=True):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.rerun()
+    trail = breadcrumb_path(graph, focus_id, current_repository)
+    display_trail: list[str | None] = list(trail)
+    if len(display_trail) > 6:
+        display_trail = [*display_trail[:2], None, *display_trail[-3:]]
+    st.caption("Current location")
+    crumb_columns = st.columns(len(display_trail))
+    for index, (column, node_id) in enumerate(zip(crumb_columns, display_trail)):
+        if node_id is None:
+            column.markdown(
+                "<div style='text-align:center'>…</div>", unsafe_allow_html=True
+            )
+            continue
+        if column.button(
+            ("" if index == 0 else "› ") + graph.nodes[node_id]["name"],
+            key=f"crumb-{snapshot_id}-{index}-{node_id}",
+            use_container_width=True,
+            disabled=node_id == focus_id,
+        ):
+            select_node(
+                node_id,
+                node_type=graph.nodes[node_id]["node_type"],
+                repository_id=repository_scope(graph, node_id, current_repository),
+            )
+            st.rerun()
     visible, hidden = bounded_neighborhood(graph, focus_id)
+    dimmed_ancestors = (nx.ancestors(graph, focus_id) & set(visible)) - set(trail)
+    emphasized_edges = emphasized_context_edges(graph, focus_id, trail, set(visible))
     canvas, details = st.columns([3, 1], gap="large")
     with canvas:
         if hidden:
@@ -236,6 +343,8 @@ def main() -> None:
                 visible,
                 focus_id,
                 data_root,
+                dimmed_ids=dimmed_ancestors,
+                emphasized_edges=emphasized_edges,
                 key=f"graph-{snapshot_id}-{focus_id}",
             )
             if event and event.get("nonce") != st.session_state.get("canvas_nonce"):
@@ -247,6 +356,10 @@ def main() -> None:
                         panel="ring"
                         if event.get("kind") == "thumbnail_select"
                         else "metadata",
+                        node_type=graph.nodes[clicked]["node_type"],
+                        repository_id=repository_scope(
+                            graph, clicked, current_repository
+                        ),
                     )
                     st.rerun()
         else:
@@ -262,7 +375,13 @@ def main() -> None:
             if points and points[0].get("customdata") in graph:
                 clicked = points[0]["customdata"]
                 if clicked != st.session_state.get("selected_id"):
-                    select_node(clicked)
+                    select_node(
+                        clicked,
+                        node_type=graph.nodes[clicked]["node_type"],
+                        repository_id=repository_scope(
+                            graph, clicked, current_repository
+                        ),
+                    )
                     st.rerun()
         st.caption(
             "Click a node to refocus. The canvas shows two levels toward ancestors and one toward descendants."

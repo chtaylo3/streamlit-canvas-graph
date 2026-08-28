@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Annotated
 
@@ -8,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .database import create_demo_dataset
-from .github_client import GitHubClient
+from .github_client import GitHubClient, GitHubError
 from .ingestion import ingest_repositories
 from .provisioning import (
     active_provisioned,
@@ -119,6 +121,14 @@ def provision_create(
     yes: Annotated[
         bool, typer.Option("--yes", help="Accept the displayed creation preview.")
     ] = False,
+    workers: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            max=4,
+            help="Number of repository snapshots to create concurrently.",
+        ),
+    ] = 2,
 ) -> None:
     token = _token("github_provision_token")
     entries = load_catalog(catalog)
@@ -148,9 +158,34 @@ def provision_create(
             f"Create {len(checks)} private repositories under {account['login']}?"
         ):
             raise typer.Abort()
-        for check in checks:
-            record = provision(client, token, account["login"], check, prefix, manifest)
-            console.print(f"Created [bold]{record['destination_full_name']}[/bold]")
+        owner = account["login"]
+
+    def create_one(check: object) -> dict[str, object]:
+        with GitHubClient(token) as worker_client:
+            return provision(worker_client, token, owner, check, prefix, manifest)
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(create_one, check): check for check in checks}
+        failures = []
+        for future in as_completed(futures):
+            check = futures[future]
+            try:
+                record = future.result()
+            except (
+                GitHubError,
+                OSError,
+                subprocess.SubprocessError,
+                ValueError,
+            ) as exc:
+                failures.append((check.entry.full_name, exc))
+                console.print(f"[red]Failed {check.entry.full_name}: {exc}[/red]")
+            else:
+                console.print(f"Created [bold]{record['destination_full_name']}[/bold]")
+    if failures:
+        console.print(
+            f"[red]{len(failures)} repositories failed and were rolled back.[/red]"
+        )
+        raise typer.Exit(1)
 
 
 @provision_app.command("cleanup")

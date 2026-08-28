@@ -7,7 +7,9 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import threading
 import tomllib
+from base64 import b64decode
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +19,13 @@ from urllib.parse import urlparse
 from .github_client import GitHubClient, GitHubError, matching_paths
 
 ALLOWED_LICENSES = {"MIT", "Apache-2.0", "BSD-3-Clause", "Artistic-2.0"}
+LICENSE_MARKERS = {
+    "MIT": ("permission is hereby granted, free of charge",),
+    "Apache-2.0": ("apache license", "version 2.0"),
+    "BSD-3-Clause": ("redistributions of source code must retain",),
+    "Artistic-2.0": ("the artistic license 2.0",),
+}
+_MANIFEST_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,7 +99,7 @@ def preflight(client: GitHubClient, entry: CatalogEntry) -> Preflight:
         tree = client.tree(entry.full_name, branch)
         manifests = tuple(matching_paths(tree, entry.patterns))
         license_payload = client.license(entry.full_name)
-        detected_license = license_payload.get("license", {}).get("spdx_id")
+        detected_license = verified_license(license_payload, entry.license)
         sha = client.get(f"/repos/{entry.full_name}/commits/{branch}")["sha"]
         if detected_license not in ALLOWED_LICENSES:
             return Preflight(
@@ -125,6 +134,28 @@ def preflight(client: GitHubClient, entry: CatalogEntry) -> Preflight:
         )
     except (GitHubError, KeyError, ValueError) as exc:
         return Preflight(entry, False, None, None, None, None, (), str(exc))
+
+
+def verified_license(payload: dict[str, Any], expected: str) -> str | None:
+    """Resolve GitHub's SPDX result, verifying ambiguous results from file content."""
+    detected = payload.get("license", {}).get("spdx_id")
+    if detected in ALLOWED_LICENSES:
+        return detected
+    if (
+        detected not in {None, "NOASSERTION", "OTHER"}
+        or expected not in ALLOWED_LICENSES
+    ):
+        return detected
+    if payload.get("encoding") != "base64" or not payload.get("content"):
+        return detected
+    try:
+        encoded = "".join(payload["content"].split())
+        content = b64decode(encoded, validate=True).decode("utf-8", errors="replace")
+    except (ValueError, TypeError):
+        return detected
+    normalized = content.casefold()
+    markers = LICENSE_MARKERS[expected]
+    return expected if all(marker in normalized for marker in markers) else detected
 
 
 def destination_name(prefix: str, entry: CatalogEntry) -> str:
@@ -162,10 +193,12 @@ def provision(
         name, f"Private dependency-explorer test copy of {check.entry.source}"
     )
     try:
+        # Disable workflows before uploading any untrusted repository contents.
+        client.disable_actions(created["full_name"])
         _copy_default_branch(
             check.entry.source, check.default_branch, created["clone_url"], token
         )
-    except Exception:
+    except BaseException:
         try:
             client.delete_repository(created["full_name"])
         except GitHubError:
@@ -220,7 +253,9 @@ def active_provisioned(manifest_path: Path) -> list[dict[str, Any]]:
 def _copy_default_branch(
     source: str, branch: str, destination: str, token: str
 ) -> None:
-    with tempfile.TemporaryDirectory(prefix="scg-provision-") as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix="scg-provision-", ignore_cleanup_errors=True
+    ) as temporary:
         root = Path(temporary)
         checkout = root / "source"
         subprocess.run(
@@ -254,6 +289,12 @@ def _copy_default_branch(
         )
         subprocess.run(
             ["git", "config", "user.email", "noreply@localhost"],
+            cwd=checkout,
+            check=True,
+        )
+        subprocess.run(["git", "config", "gc.auto", "0"], cwd=checkout, check=True)
+        subprocess.run(
+            ["git", "config", "maintenance.auto", "false"],
             cwd=checkout,
             check=True,
         )
@@ -302,9 +343,10 @@ def _read_manifest(path: Path) -> dict[str, Any]:
 
 
 def _append_manifest(path: Path, record: dict[str, Any]) -> None:
-    payload = _read_manifest(path)
-    payload["repositories"].append(record)
-    _write_manifest(path, payload)
+    with _MANIFEST_LOCK:
+        payload = _read_manifest(path)
+        payload["repositories"].append(record)
+        _write_manifest(path, payload)
 
 
 def _write_manifest(path: Path, payload: dict[str, Any]) -> None:

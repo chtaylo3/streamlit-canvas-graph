@@ -28,9 +28,10 @@ def test_package_lock_parses_direct_and_transitive_packages() -> None:
 def test_uv_lock_parses_parent_relationships() -> None:
     parsed = parse_manifest(
         "uv.lock",
-        '[[package]]\nname="alpha"\nversion="1.0.0"\ndependencies=[{name="beta"}]\n[[package]]\nname="beta"\nversion="2.0.0"\n',
+        '[[package]]\nname="project"\nversion="0.1.0"\nsource={editable="."}\ndependencies=[{name="alpha"}]\n[[package]]\nname="alpha"\nversion="1.0.0"\ndependencies=[{name="beta"}]\n[[package]]\nname="beta"\nversion="2.0.0"\n',
     )
     assert len(parsed.packages) == 2
+    assert parsed.packages[0].direct
     assert parsed.packages[0].dependencies == [("beta", "")]
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +79,104 @@ def _bfs_nodes(graph: nx.DiGraph, source: str, depth: int) -> set[str]:
         if not frontier:
             break
     return result
+
+
+def repository_scope(
+    graph: nx.DiGraph, node_id: str | None, current_repository: str | None = None
+) -> str | None:
+    if (
+        current_repository in graph
+        and graph.nodes[current_repository].get("node_type") == "repository"
+        and (
+            node_id == current_repository
+            or (node_id in graph and nx.has_path(graph, current_repository, node_id))
+        )
+    ):
+        return current_repository
+    if node_id in graph and graph.nodes[node_id].get("node_type") == "repository":
+        return node_id
+    if node_id not in graph:
+        return None
+    repositories = [
+        node
+        for node in nx.ancestors(graph, node_id)
+        if graph.nodes[node].get("node_type") == "repository"
+    ]
+    return min(
+        repositories,
+        key=lambda node: graph.nodes[node].get("name", "").casefold(),
+        default=None,
+    )
+
+
+def scoped_explore_paths(
+    graph: nx.DiGraph, node_type: str, repository_id: str | None
+) -> dict[str, tuple[str, ...]]:
+    if node_type in {"account", "repository"}:
+        return {
+            node: (node,)
+            for node, data in graph.nodes(data=True)
+            if data.get("node_type") == node_type
+        }
+    if repository_id not in graph:
+        return {}
+    paths = nx.single_source_shortest_path(graph, repository_id)
+    if node_type == "all":
+        return {
+            node: tuple(path)
+            for node, path in paths.items()
+            if graph.nodes[node].get("node_type") != "account"
+        }
+    return {
+        node: tuple(path[1:])
+        for node, path in paths.items()
+        if graph.nodes[node].get("node_type") == node_type
+    }
+
+
+def breadcrumb_path(
+    graph: nx.DiGraph, node_id: str, repository_id: str | None
+) -> tuple[str, ...]:
+    if node_id not in graph:
+        return ()
+    if graph.nodes[node_id].get("node_type") == "account":
+        return (node_id,)
+    repository_id = repository_scope(graph, node_id, repository_id)
+    if repository_id is None:
+        return (node_id,)
+    accounts = [
+        node
+        for node in graph.predecessors(repository_id)
+        if graph.nodes[node].get("node_type") == "account"
+    ]
+    prefix = [accounts[0]] if accounts else []
+    if node_id == repository_id:
+        return (*prefix, repository_id)
+    try:
+        return (*prefix, *nx.shortest_path(graph, repository_id, node_id))
+    except nx.NetworkXNoPath:
+        return (*prefix, repository_id, node_id)
+
+
+def emphasized_context_edges(
+    graph: nx.DiGraph,
+    focus_id: str,
+    breadcrumb: tuple[str, ...],
+    visible_nodes: set[str],
+) -> set[tuple[str, str]]:
+    lineage = {
+        (source, target)
+        for source, target in pairwise(breadcrumb)
+        if source in visible_nodes
+        and target in visible_nodes
+        and graph.has_edge(source, target)
+    }
+    children = {
+        (focus_id, target)
+        for target in graph.successors(focus_id)
+        if target in visible_nodes
+    }
+    return lineage | children
 
 
 def node_metrics(

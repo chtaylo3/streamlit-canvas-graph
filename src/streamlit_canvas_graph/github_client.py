@@ -62,6 +62,13 @@ class GitHubClient:
             )
         return response.json()
 
+    def put(self, path: str, payload: dict[str, Any]) -> None:
+        response = self.client.put(path, json=payload)
+        if response.is_error:
+            raise GitHubError(
+                f"GitHub API request failed ({response.status_code}) for {path}"
+            )
+
     def delete(self, path: str) -> None:
         response = self.client.delete(path)
         if response.is_error:
@@ -149,6 +156,9 @@ class GitHubClient:
                 "has_wiki": False,
             },
         )
+
+    def disable_actions(self, full_name: str) -> None:
+        self.put(f"/repos/{full_name}/actions/permissions", {"enabled": False})
 
     def delete_repository(self, full_name: str) -> None:
         self.delete(f"/repos/{full_name}")

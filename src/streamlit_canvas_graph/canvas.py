@@ -16,7 +16,13 @@ _component = (
 
 
 def dependency_canvas(
-    graph: nx.DiGraph, focus_id: str, data_root: Path, *, key: str
+    graph: nx.DiGraph,
+    focus_id: str,
+    data_root: Path,
+    *,
+    dimmed_ids: set[str] | None = None,
+    emphasized_edges: set[tuple[str, str]] | None = None,
+    key: str,
 ) -> dict[str, Any] | None:
     if _component is None:
         return None
@@ -37,6 +43,7 @@ def dependency_canvas(
                 "version": data.get("version"),
                 "thumbnail": encoded,
                 "focused": node_id == focus_id,
+                "dimmed": node_id in (dimmed_ids or set()),
             }
         )
     edges = [
@@ -44,6 +51,9 @@ def dependency_canvas(
             "source": source,
             "target": target,
             "type": data.get("edge_type", "depends_on"),
+            "dimmed": source in (dimmed_ids or set())
+            or target in (dimmed_ids or set()),
+            "emphasized": (source, target) in (emphasized_edges or set()),
         }
         for source, target, data in graph.edges(data=True)
     ]
