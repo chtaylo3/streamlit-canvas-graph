@@ -44,7 +44,7 @@ this order:
 Create a local secrets file from the safe template:
 
 ```bash
-cp .secrets.toml.example .secrets.toml
+install -m 600 .secrets.toml.example .secrets.toml
 ```
 
 Then edit `.secrets.toml`:
@@ -118,6 +118,15 @@ ecosystem registry metadata. Unsupported or partial inputs are recorded in the
 Tokens are never accepted as CLI arguments and are not written to logs,
 DuckDB, Parquet, thumbnails, or Streamlit state.
 
+## Private-data boundary
+
+Snapshots contain GitHub account names, repository names and URLs, manifest
+paths, dependency relationships, and vulnerability findings. The entire `data/`
+tree is ignored by Git and must never be committed, attached to an issue, or
+published as a build artifact. This application does not provide authentication;
+serve private-derived datasets only on a trusted local machine or behind an
+independently authenticated access layer.
+
 ## Optional private test copies
 
 [`config/test-repositories.toml`](config/test-repositories.toml) contains four
@@ -152,6 +161,15 @@ uv run scg provision cleanup
 
 Review upstream licenses before provisioning. License and attribution files
 from the default branch are retained in each private copy.
+
+## Contributing and security
+
+Pull requests are accepted from approved repository collaborators. Other users
+should open an issue to discuss a proposed change. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md), and the
+maintainer list in [`.github/MAINTAINERS.md`](.github/MAINTAINERS.md).
+
+This project is licensed under the Apache License 2.0.
 
 ## Development
 
