@@ -1,0 +1,109 @@
+version = 1
+
+[[repositories]]
+source = "https://github.com/microsoft/vscode"
+ecosystem = "npm"
+patterns = ["package.json", "package-lock.json", "extensions/*/package-lock.json"]
+license = "MIT"
+complexity = "very-high"
+note = "Large application with a root lockfile and extension-specific manifests."
+default_selected = true
+
+[[repositories]]
+source = "https://github.com/npm/cli"
+ecosystem = "npm"
+patterns = ["package.json", "package-lock.json"]
+license = "Artistic-2.0"
+complexity = "very-high"
+note = "Workspaces, bundled packages, and extensive runtime/development dependencies."
+default_selected = true
+
+[[repositories]]
+source = "https://github.com/microsoft/TypeScript"
+ecosystem = "npm"
+patterns = ["package.json", "package-lock.json"]
+license = "Apache-2.0"
+complexity = "high"
+note = "Compiler build, test, lint, browser, and coverage toolchain."
+default_selected = true
+
+[[repositories]]
+source = "https://github.com/node-red/node-red"
+ecosystem = "npm"
+patterns = ["package.json", "package-lock.json", "packages/*/package.json"]
+license = "Apache-2.0"
+complexity = "high"
+note = "Multi-package runtime and editor application."
+default_selected = true
+
+[[repositories]]
+source = "https://github.com/apache/airflow"
+ecosystem = "PyPI"
+patterns = ["pyproject.toml", "uv.lock"]
+license = "Apache-2.0"
+complexity = "very-high"
+note = "Large uv workspace with many distributions and provider packages."
+default_selected = true
+
+[[repositories]]
+source = "https://github.com/langchain-ai/langchain"
+ecosystem = "PyPI"
+patterns = ["pyproject.toml", "uv.lock", "libs/*/pyproject.toml"]
+license = "MIT"
+complexity = "very-high"
+note = "Multi-package uv monorepo with partner integrations."
+default_selected = true
+
+[[repositories]]
+source = "https://github.com/home-assistant/core"
+ecosystem = "PyPI"
+patterns = ["pyproject.toml", "requirements*.txt"]
+license = "Apache-2.0"
+complexity = "very-high"
+note = "Integration-heavy application with large generated requirement sets."
+default_selected = true
+
+[[repositories]]
+source = "https://github.com/PrefectHQ/prefect"
+ecosystem = "PyPI"
+patterns = ["pyproject.toml", "uv.lock"]
+license = "Apache-2.0"
+complexity = "high"
+note = "Workflow orchestration server, client, database, and infrastructure."
+default_selected = true
+
+[[repositories]]
+source = "https://github.com/microsoft/PowerToys"
+ecosystem = "NuGet"
+patterns = ["Directory.Packages.props", "**/*.csproj"]
+license = "MIT"
+complexity = "very-high"
+note = "Many utilities using central package management and transitive pinning."
+default_selected = true
+
+[[repositories]]
+source = "https://github.com/AvaloniaUI/Avalonia"
+ecosystem = "NuGet"
+patterns = ["Directory.Packages.props", "src/**/*.csproj", "tests/**/*.csproj"]
+license = "MIT"
+complexity = "very-high"
+note = "Cross-platform framework with source, tests, build tooling, and samples."
+default_selected = true
+
+[[repositories]]
+source = "https://github.com/OrchardCMS/OrchardCore"
+ecosystem = "NuGet"
+patterns = ["Directory.Packages.props", "src/**/*.csproj", "yarn.lock"]
+license = "BSD-3-Clause"
+complexity = "very-high"
+note = "Modular ASP.NET Core framework with an incidental frontend graph."
+default_selected = true
+
+[[repositories]]
+source = "https://github.com/icsharpcode/ILSpy"
+ecosystem = "NuGet"
+patterns = ["Directory.Packages.props", "**/packages.lock.json"]
+license = "MIT"
+complexity = "high"
+note = "Multi-project solution with committed lockfiles per project."
+default_selected = true

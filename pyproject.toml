@@ -1,0 +1,42 @@
+[project]
+name = "streamlit-canvas-graph"
+version = "0.1.0"
+description = "A GitHub-backed dependency and vulnerability graph explorer for Streamlit."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "duckdb>=1.5.5",
+    "dynaconf>=3.3.5",
+    "httpx>=0.28.1",
+    "networkx>=3.6.1",
+    "packaging>=26.3",
+    "pillow>=12.3.0",
+    "plotly>=7.0.0",
+    "pytz>=2026.3.post1",
+    "rich>=15.0.0",
+    "streamlit>=1.62.0",
+    "typer>=0.27.1",
+]
+
+[project.scripts]
+streamlit-canvas-graph = "streamlit_canvas_graph:main"
+scg = "streamlit_canvas_graph.cli:app"
+scg-ingest = "streamlit_canvas_graph.cli:ingest_app"
+scg-provision = "streamlit_canvas_graph.cli:provision_app"
+
+[build-system]
+requires = ["uv_build>=0.8.15,<0.9.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.1",
+    "ruff>=0.12.11",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
