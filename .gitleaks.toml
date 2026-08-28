@@ -1,0 +1,8 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic AWS credential used to verify application redaction"
+regexTarget = "match"
+regexes = ['''AKIA1234567890ABCDEF''']
+paths = ['''tests/test_ingestion\.py''']
