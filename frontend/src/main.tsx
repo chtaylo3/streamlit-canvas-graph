@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Background,
@@ -11,10 +11,12 @@ import {
   type Edge,
   type Node,
   type NodeProps,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Streamlit, type Theme } from "streamlit-component-lib";
 import "./style.css";
+import { focusNode, mergeNodes } from "./canvas-state";
 import { canvasEvent, type CanvasEventKind } from "./events";
 import { layoutNodes } from "./layout";
 
@@ -57,20 +59,35 @@ function Canvas({ args, disabled, theme }: CanvasProps) {
   const emit = useCallback((kind: CanvasEventKind, nodeId: string) => Streamlit.setComponentValue(canvasEvent(kind, nodeId)), []);
   const baseNodes = useMemo<CanvasNode[]>(() => inputNodes.map((node) => ({ id: node.id, type: "dependencyNode", position: { x: 0, y: 0 }, data: { ...node, onThumbnail: (id) => emit("thumbnail_select", id) } })), [args.nodes, emit]);
   const edges = useMemo<Edge[]>(() => inputEdges.map((edge, index) => ({ id: `${edge.source}-${edge.target}-${index}`, source: edge.source, target: edge.target, type: "smoothstep", pathOptions: { borderRadius: 12, offset: 24 }, label: edge.type === "depends_on" ? undefined : edge.type, animated: false, style: { opacity: edge.dimmed ? 0.22 : 1, strokeWidth: edge.emphasized ? 3 : 1.5 } })), [args.edges]);
-  const [nodes, setNodes] = useState<CanvasNode[] | null>(null);
+  const [nodes, setNodes] = useState<CanvasNode[]>(baseNodes);
+  const [layingOut, setLayingOut] = useState(true);
+  const instance = useRef<ReactFlowInstance<CanvasNode, Edge> | null>(null);
+  const visibleIds = useRef<Set<string>>(new Set());
   useEffect(() => {
     let active = true;
-    setNodes(null);
+    const nextIds = new Set(baseNodes.map((node) => node.id));
+    const topologyChanged = nextIds.size !== visibleIds.current.size || [...nextIds].some((id) => !visibleIds.current.has(id));
+    setNodes((current) => mergeNodes(current, baseNodes));
+    setLayingOut(true);
     layoutNodes(baseNodes, edges).then((laidOut) => {
-      if (active) setNodes(laidOut);
+      if (!active) return;
+      setNodes(laidOut);
+      setLayingOut(false);
+      visibleIds.current = nextIds;
+      if (topologyChanged) requestAnimationFrame(() => instance.current?.fitView({ padding: 0.18, duration: 350 }));
     });
     return () => { active = false; };
   }, [baseNodes, edges]);
   useEffect(() => Streamlit.setFrameHeight(620), []);
+  const selectNode = useCallback((nodeId: string) => {
+    setNodes((current) => focusNode(current, nodeId));
+    emit("node_select", nodeId);
+  }, [emit]);
   return <div className={`canvas ${theme?.base ?? "light"}`}>
-    {nodes === null ? <div className="canvas-loading">Laying out dependency graph…</div> : <ReactFlowProvider><ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} nodesDraggable={false} nodesConnectable={false} elementsSelectable={!disabled} fitView fitViewOptions={{ padding: 0.18, duration: 300 }} minZoom={0.08} maxZoom={2.5} onInit={(instance) => requestAnimationFrame(() => instance.fitView({ padding: 0.18, duration: 300 }))} onNodeClick={(_, node) => emit("node_select", node.id)} colorMode={theme?.base === "dark" ? "dark" : "light"}>
+    <ReactFlowProvider><ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} nodesDraggable={false} nodesConnectable={false} elementsSelectable={!disabled} minZoom={0.08} maxZoom={2.5} onInit={(flowInstance) => { instance.current = flowInstance; requestAnimationFrame(() => flowInstance.fitView({ padding: 0.18, duration: 300 })); }} onNodeClick={(_, node) => selectNode(node.id)} colorMode={theme?.base === "dark" ? "dark" : "light"}>
       <Background gap={22} size={1} /><Controls /><MiniMap pannable zoomable nodeColor={(node) => ({ account: "#0f172a", repository: "#2563eb", manifest: "#7c3aed", dependency: "#0891b2" }[(node.data as CanvasNodeData).nodeType] ?? "#64748b")} />
-    </ReactFlow></ReactFlowProvider>}
+    </ReactFlow></ReactFlowProvider>
+    {layingOut && nodes.length === 0 && <div className="canvas-loading">Laying out dependency graph…</div>}
   </div>;
 }
 

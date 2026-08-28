@@ -12,3 +12,6 @@ html, body, #root, .canvas { margin: 0; width: 100%; height: 620px; font-family:
 .ring-button img { width: 34px; height: 34px; }
 .type-account { border-top-color: #0f172a; }.type-repository { border-top-color: #2563eb; }.type-manifest { border-top-color: #7c3aed; }.type-dependency { border-top-color: #0891b2; }
 .react-flow__edge-path { stroke: #94a3b8; stroke-width: 1.5; }.react-flow__minimap { border: 1px solid #cbd5e1; border-radius: 8px; }
+.react-flow__node {
+  transition: transform 300ms ease, opacity 180ms ease;
+}
