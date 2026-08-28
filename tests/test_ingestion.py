@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 from streamlit_canvas_graph.database import connect, initialize_database, insert_node
 from streamlit_canvas_graph.github_client import Repository
-from streamlit_canvas_graph.ingestion import _store_manifest
+from streamlit_canvas_graph.ingestion import _store_manifest, redact_secrets
 from streamlit_canvas_graph.model import NodeType
 from streamlit_canvas_graph.parsers import Package, ParsedManifest
 
@@ -70,3 +70,17 @@ def test_manifest_edges_include_only_direct_dependencies(tmp_path) -> None:
         ("direct", "transitive", False),
         ("package-lock.json", "direct", True),
     ]
+
+
+def test_redact_secrets_covers_common_credential_shapes() -> None:
+    message = (
+        "token=plain-secret github_pat_1234567890 ghp_1234567890 "
+        "https://user:password@example.test AKIA1234567890ABCDEF"
+    )
+
+    redacted = redact_secrets(message)
+
+    assert "plain-secret" not in redacted
+    assert "1234567890" not in redacted
+    assert "password" not in redacted
+    assert "AKIA1234567890ABCDEF" not in redacted

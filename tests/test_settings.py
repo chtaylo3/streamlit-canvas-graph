@@ -3,7 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from streamlit_canvas_graph.settings import PROJECT_ROOT, reload_config
+from streamlit_canvas_graph.settings import (
+    PROJECT_ROOT,
+    _warn_insecure_secret_permissions,
+    reload_config,
+)
 
 
 def test_settings_use_tracked_defaults(monkeypatch) -> None:
@@ -30,3 +34,12 @@ def test_missing_secret_has_safe_error(monkeypatch) -> None:
     with pytest.raises(RuntimeError, match="SCG_GITHUB_PROVISION_TOKEN") as error:
         config.require_secret("github_provision_token")
     assert "github_pat" not in str(error.value)
+
+
+def test_insecure_secret_permissions_warn(tmp_path) -> None:
+    secrets = tmp_path / ".secrets.toml"
+    secrets.write_text('github_read_token = "test"')
+    secrets.chmod(0o644)
+
+    with pytest.warns(UserWarning, match="chmod 600"):
+        _warn_insecure_secret_permissions(secrets)

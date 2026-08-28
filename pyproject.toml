@@ -3,6 +3,13 @@ name = "streamlit-canvas-graph"
 version = "0.1.0"
 description = "A GitHub-backed dependency and vulnerability graph explorer for Streamlit."
 readme = "README.md"
+license = "Apache-2.0"
+authors = [{ name = "chtaylo3" }]
+maintainers = [{ name = "chtaylo3" }]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.12",
+]
 requires-python = ">=3.12"
 dependencies = [
     "duckdb>=1.5.5",
@@ -17,6 +24,11 @@ dependencies = [
     "streamlit>=1.62.0",
     "typer>=0.27.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/chtaylo3/streamlit-canvas-graph"
+Repository = "https://github.com/chtaylo3/streamlit-canvas-graph"
+Issues = "https://github.com/chtaylo3/streamlit-canvas-graph/issues"
 
 [project.scripts]
 streamlit-canvas-graph = "streamlit_canvas_graph:main"

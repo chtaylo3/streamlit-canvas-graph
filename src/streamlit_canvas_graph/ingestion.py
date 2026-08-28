@@ -512,10 +512,22 @@ def _issue(
     *,
     severity: str = "error",
 ) -> None:
-    sanitized = re.sub(
-        r"(?i)(token|authorization|bearer)\s*[:=]?\s*\S+", r"\1=[REDACTED]", message
-    )
+    sanitized = redact_secrets(message)
     connection.execute(
         "INSERT INTO ingestion_issues VALUES (?, ?, ?, ?, ?, ?)",
         [snapshot_id, repo_id, path, severity, code, sanitized[:2000]],
     )
+
+
+def redact_secrets(message: str) -> str:
+    """Redact credential shapes before text reaches logs or snapshot data."""
+    patterns = (
+        (r"(?i)(token|authorization|bearer)\s*[:=]?\s*\S+", r"\1=[REDACTED]"),
+        (r"github_pat_[A-Za-z0-9_]+", "github_pat_[REDACTED]"),
+        (r"gh[oprsu]_[A-Za-z0-9]+", "ghx_[REDACTED]"),
+        (r"https?://[^/@\s:]+:[^/@\s]+@", "https://[REDACTED]@"),
+        (r"AKIA[0-9A-Z]{16}", "AKIA[REDACTED]"),
+    )
+    for pattern, replacement in patterns:
+        message = re.sub(pattern, replacement, message)
+    return message

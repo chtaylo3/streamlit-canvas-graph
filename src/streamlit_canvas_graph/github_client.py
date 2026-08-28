@@ -9,7 +9,9 @@ import httpx
 
 
 class GitHubError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +52,8 @@ class GitHubClient:
         response = self.client.get(path, **kwargs)
         if response.is_error:
             raise GitHubError(
-                f"GitHub API request failed ({response.status_code}) for {path}"
+                f"GitHub API request failed ({response.status_code}) for {path}",
+                status_code=response.status_code,
             )
         return response.json()
 
@@ -58,7 +61,8 @@ class GitHubClient:
         response = self.client.post(path, json=payload)
         if response.is_error:
             raise GitHubError(
-                f"GitHub API request failed ({response.status_code}) for {path}"
+                f"GitHub API request failed ({response.status_code}) for {path}",
+                status_code=response.status_code,
             )
         return response.json()
 
@@ -66,14 +70,16 @@ class GitHubClient:
         response = self.client.put(path, json=payload)
         if response.is_error:
             raise GitHubError(
-                f"GitHub API request failed ({response.status_code}) for {path}"
+                f"GitHub API request failed ({response.status_code}) for {path}",
+                status_code=response.status_code,
             )
 
     def delete(self, path: str) -> None:
         response = self.client.delete(path)
         if response.is_error:
             raise GitHubError(
-                f"GitHub API request failed ({response.status_code}) for {path}"
+                f"GitHub API request failed ({response.status_code}) for {path}",
+                status_code=response.status_code,
             )
 
     def authenticated_user(self) -> dict[str, Any]:
@@ -136,7 +142,8 @@ class GitHubClient:
         )
         if response.is_error:
             raise GitHubError(
-                f"Unable to read {full_name}/{path} ({response.status_code})"
+                f"Unable to read {full_name}/{path} ({response.status_code})",
+                status_code=response.status_code,
             )
         return response.text
 
