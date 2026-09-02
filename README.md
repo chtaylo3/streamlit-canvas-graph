@@ -1,4 +1,4 @@
-# GitHub Dependency Explorer
+# Streamlit Graph Canvas dependency explorer
 
 A Streamlit application for browsing GitHub accounts, repositories, manifests,
 direct dependencies, and transitive dependencies without rendering an entire
@@ -76,13 +76,17 @@ example secrets file.
 
 - Account → repository → manifest → shared dependency navigation.
 - Two ancestor levels and one descendant level around the focused node.
+- Ancestors outside the active breadcrumb trail are dimmed while the active
+  lineage and immediate descendant edges remain emphasized.
 - A hard 500-node canvas limit with explicit truncation messaging.
-- First-party React Flow canvas with ELK layered layout, pan/zoom, controls,
-  minimap, keyboard-selectable nodes, and separate node/thumbnail targets.
+- The reusable `streamlit-graph-canvas==0.1.0rc1` component supplies the typed
+  graph contract, React Flow canvas, ELK layout, pan/zoom, controls, minimap,
+  keyboard navigation, and validated selection state.
+- `streamlit-graph-canvas-contrib==0.1.0rc1` supplies explicitly enabled
+  connection-count badges without application-owned JavaScript.
 - Node metadata or enlarged ring details in the right panel.
 - Snapshot history, global node search, manual refresh, severity cards, and a
   filterable vulnerability table.
-- Plotly fallback canvas if the committed frontend bundle is unavailable.
 
 The concentric rings use fixed semantics: direct/transitive on the inner ring,
 major/minor/patch updates in the middle, and critical/high/medium/low findings
@@ -181,19 +185,10 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
-The committed production frontend lets app users run with Python alone.
-Frontend development additionally requires Node.js 22 or newer:
-
-```bash
-cd frontend
-npm install
-npm test
-npm run build
-npm audit --audit-level=high
-```
-
-The Vite build writes directly to
-`src/streamlit_canvas_graph/frontend/`, which is included in the Python wheel.
+The application consumes the pinned `streamlit-graph-canvas` and
+`streamlit-graph-canvas-contrib` wheels from PyPI. Their packaged frontend and
+renderer assets mean this example requires no local Node.js build. Update both
+pins together because the prerelease renderer contract is versioned as a pair.
 
 ## Data model
 
@@ -203,10 +198,20 @@ Dependency identity is stable across repositories within a snapshot by
 ecosystem, normalized package name, and resolved version. Each snapshot is also
 exported as table-oriented Parquet under `parquet/<snapshot_uuid>/`.
 
-Manifest-to-package `depends_on` edges identify declared direct dependencies.
-The separate `resolves` edge anchors a parsed dependency component to its source
-manifest when the parser cannot identify a direct declaration; it conveys
-provenance, not direct-dependency status. Ingestion resolves each repository's
+Manifest-to-package edges identify declared direct dependencies. Ordinary and
+development requirements use `depends_on`; optional requirements use
+`optional_depends_on`. npm package-to-package relationships retain each
+installation location long enough to apply Node's nearest-`node_modules`
+resolution rules before packages are collapsed to stable name/version identity.
+`peerDependencies` use the distinct `peer_requires` relationship because they
+describe host compatibility rather than package ownership. Edge metadata records
+the requested range, relationship kind, optionality, and available source and
+target installation locations.
+
+The separate `resolves` edge is a final provenance fallback. It anchors only a
+dependency component that remains disconnected after ordinary, optional, and
+peer relationships have been processed; it conveys provenance, not
+direct-dependency status. Ingestion resolves each repository's
 default branch to an immutable commit SHA and stores SHA-256 hashes for parsed
 manifest and SBOM content. A snapshot is rolled back if any dependency remains
 unreachable from a manifest before metrics and exports are finalized.
