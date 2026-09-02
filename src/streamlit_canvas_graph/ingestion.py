@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import uuid
@@ -11,6 +12,7 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
+import networkx as nx
 from packaging.version import InvalidVersion, Version
 
 from .database import (
@@ -55,31 +57,39 @@ def ingest_repositories(
     initialize_database(connection)
     captured_at = datetime.now(UTC).replace(microsecond=0)
     snapshot_id = str(uuid.uuid4())
-    connection.execute(
-        "INSERT INTO snapshots VALUES (?, ?, ?, ?)",
-        [
+    connection.execute("BEGIN TRANSACTION")
+    try:
+        connection.execute(
+            "INSERT INTO snapshots VALUES (?, ?, ?, ?)",
+            [
+                snapshot_id,
+                captured_at,
+                "github",
+                json.dumps({"collector": "scg-ingest", "schema_version": 1}),
+            ],
+        )
+        account_id = stable_id("github-account", str(account["id"]))
+        insert_node(
+            connection,
             snapshot_id,
-            captured_at,
-            "github",
-            json.dumps({"collector": "scg-ingest", "schema_version": 1}),
-        ],
-    )
-    account_id = stable_id("github-account", str(account["id"]))
-    insert_node(
-        connection,
-        snapshot_id,
-        account_id,
-        NodeType.ACCOUNT,
-        account.get("name") or account["login"],
-        metadata={
-            "login": account["login"],
-            "account_subtype": account.get("type", "User").lower(),
-        },
-    )
-    for repository in repositories:
-        _ingest_repository(connection, client, snapshot_id, account_id, repository)
-    _enrich(connection, snapshot_id)
-    populate_metrics(connection, snapshot_id)
+            account_id,
+            NodeType.ACCOUNT,
+            account.get("name") or account["login"],
+            metadata={
+                "login": account["login"],
+                "account_subtype": account.get("type", "User").lower(),
+            },
+        )
+        for repository in repositories:
+            _ingest_repository(connection, client, snapshot_id, account_id, repository)
+        _validate_dependency_provenance(connection, snapshot_id)
+        _enrich(connection, snapshot_id)
+        populate_metrics(connection, snapshot_id)
+        connection.execute("COMMIT")
+    except Exception:
+        connection.execute("ROLLBACK")
+        connection.close()
+        raise
     thumbnail_root = output_root / "thumbnails"
     for (node_id,) in connection.execute(
         "SELECT node_id FROM nodes WHERE snapshot_id = ?", [snapshot_id]
@@ -103,6 +113,7 @@ def _ingest_repository(
     repository: Repository,
 ) -> None:
     repo_id = stable_id("github-repository", str(repository.repo_id))
+    commit_sha = client.commit_sha(repository.full_name, repository.default_branch)
     insert_node(
         connection,
         snapshot_id,
@@ -113,6 +124,7 @@ def _ingest_repository(
             "full_name": repository.full_name,
             "visibility": "private" if repository.private else "public",
             "default_branch": repository.default_branch,
+            "commit_sha": commit_sha,
             "url": repository.html_url,
         },
     )
@@ -120,19 +132,25 @@ def _ingest_repository(
         "INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)",
         [snapshot_id, account_id, repo_id, EdgeType.OWNS, False, "{}"],
     )
+    source_ref = commit_sha
     try:
-        tree = client.tree(repository.full_name, repository.default_branch)
+        tree = client.tree(repository.full_name, source_ref)
         paths = matching_paths(tree, SUPPORTED_PATTERNS)
     except Exception as exc:  # noqa: BLE001 - isolate one inaccessible repository
         _issue(connection, snapshot_id, repo_id, None, "tree_unavailable", str(exc))
         paths = []
     for path in paths:
         try:
-            parsed = parse_manifest(
-                path,
-                client.content(repository.full_name, path, repository.default_branch),
+            content = client.content(repository.full_name, path, source_ref)
+            parsed = parse_manifest(path, content)
+            _store_manifest(
+                connection,
+                snapshot_id,
+                repo_id,
+                repository,
+                parsed,
+                content_sha256=hashlib.sha256(content.encode()).hexdigest(),
             )
-            _store_manifest(connection, snapshot_id, repo_id, repository, parsed)
         except Exception as exc:  # noqa: BLE001 - record malformed third-party input
             _issue(
                 connection,
@@ -163,6 +181,8 @@ def _store_manifest(
     repo_id: str,
     repository: Repository,
     parsed: ParsedManifest,
+    *,
+    content_sha256: str | None = None,
 ) -> None:
     manifest_id = stable_id("manifest", str(repository.repo_id), parsed.path)
     connection.execute(
@@ -179,6 +199,7 @@ def _store_manifest(
                     "path": parsed.path,
                     "parser": parsed.parser,
                     "complete": parsed.complete,
+                    "content_sha256": content_sha256,
                 }
             ),
         ],
@@ -188,10 +209,14 @@ def _store_manifest(
         [snapshot_id, repo_id, manifest_id, EdgeType.CONTAINS, False, "{}"],
     )
     by_name: dict[str, str] = {}
+    dependency_ids: set[str] = set()
+    direct_ids: set[str] = set()
     for package in parsed.packages:
         dependency_id = _store_package(connection, snapshot_id, package)
+        dependency_ids.add(dependency_id)
         by_name[package.name.casefold()] = dependency_id
         if package.direct:
+            direct_ids.add(dependency_id)
             connection.execute(
                 "INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)",
                 [
@@ -203,6 +228,7 @@ def _store_manifest(
                     json.dumps({"source": parsed.parser}),
                 ],
             )
+    adjacency: dict[str, set[str]] = {}
     for package in parsed.packages:
         source = by_name.get(package.name.casefold())
         if not source:
@@ -210,6 +236,7 @@ def _store_manifest(
         for child_name, _ in package.dependencies:
             target = by_name.get(child_name.casefold())
             if target and source != target:
+                adjacency.setdefault(source, set()).add(target)
                 connection.execute(
                     "INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)",
                     [
@@ -221,6 +248,15 @@ def _store_manifest(
                         json.dumps({"source": parsed.parser}),
                     ],
                 )
+    _anchor_dependency_components(
+        connection,
+        snapshot_id,
+        manifest_id,
+        dependency_ids,
+        adjacency,
+        direct_ids,
+        parsed.parser,
+    )
     for warning in parsed.warnings:
         _issue(
             connection,
@@ -283,6 +319,9 @@ def _store_sbom(
                     "path": "github-sbom.spdx.json",
                     "parser": "github-spdx",
                     "complete": True,
+                    "content_sha256": hashlib.sha256(
+                        json.dumps(sbom, sort_keys=True, separators=(",", ":")).encode()
+                    ).hexdigest(),
                 }
             ),
         ],
@@ -307,6 +346,8 @@ def _store_sbom(
         for relationship in sbom.get("relationships", [])
         if relationship.get("relationshipType") == "DESCRIBES"
     }
+    adjacency: dict[str, set[str]] = {}
+    direct_ids: set[str] = set()
     for relationship in sbom.get("relationships", []):
         source_ref, target_ref = (
             relationship.get("spdxElementId"),
@@ -319,6 +360,7 @@ def _store_sbom(
             continue
         source = refs.get(source_ref)
         if source and source != target:
+            adjacency.setdefault(source, set()).add(target)
             connection.execute(
                 "INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)",
                 [
@@ -331,6 +373,7 @@ def _store_sbom(
                 ],
             )
         if source_ref in described_ids:
+            direct_ids.add(target)
             connection.execute(
                 "INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)",
                 [
@@ -342,6 +385,86 @@ def _store_sbom(
                     json.dumps({"source": "github-spdx"}),
                 ],
             )
+    _anchor_dependency_components(
+        connection,
+        snapshot_id,
+        manifest_id,
+        set(refs.values()),
+        adjacency,
+        direct_ids,
+        "github-spdx",
+    )
+
+
+def _anchor_dependency_components(
+    connection: Any,
+    snapshot_id: str,
+    manifest_id: str,
+    dependency_ids: set[str],
+    adjacency: dict[str, set[str]],
+    directly_anchored: set[str],
+    source: str,
+) -> None:
+    """Attach otherwise-unreachable dependency components to their manifest."""
+    graph = nx.DiGraph()
+    graph.add_nodes_from(dependency_ids)
+    graph.add_edges_from(
+        (parent, child) for parent, children in adjacency.items() for child in children
+    )
+    reachable = set(directly_anchored)
+    for dependency_id in directly_anchored:
+        reachable.update(nx.descendants(graph, dependency_id))
+    remaining = graph.subgraph(dependency_ids - reachable).copy()
+    if not remaining:
+        return
+    components = list(nx.strongly_connected_components(remaining))
+    condensed = nx.condensation(remaining, components)
+    for component_id in sorted(
+        node for node, degree in condensed.in_degree() if degree == 0
+    ):
+        dependency_id = min(condensed.nodes[component_id]["members"])
+        connection.execute(
+            "INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                snapshot_id,
+                manifest_id,
+                dependency_id,
+                EdgeType.RESOLVES,
+                False,
+                json.dumps({"source": source, "reason": "component-root-provenance"}),
+            ],
+        )
+
+
+def _validate_dependency_provenance(connection: Any, snapshot_id: str) -> None:
+    rows = connection.execute(
+        """
+        WITH RECURSIVE reachable(node_id) AS (
+            SELECT node_id
+            FROM nodes
+            WHERE snapshot_id = ? AND node_type = 'manifest'
+            UNION
+            SELECT edges.target_id
+            FROM edges
+            JOIN reachable ON reachable.node_id = edges.source_id
+            WHERE edges.snapshot_id = ?
+        )
+        SELECT nodes.node_id, nodes.name, nodes.version
+        FROM nodes
+        WHERE nodes.snapshot_id = ?
+          AND nodes.node_type = 'dependency'
+          AND nodes.node_id NOT IN (SELECT node_id FROM reachable)
+        ORDER BY nodes.name, nodes.version
+        """,
+        [snapshot_id, snapshot_id, snapshot_id],
+    ).fetchall()
+    if not rows:
+        return
+    examples = ", ".join(f"{name}@{version}" for _, name, version in rows[:5])
+    raise RuntimeError(
+        f"dependency provenance validation failed: {len(rows)} dependencies are "
+        f"not reachable from a manifest (examples: {examples})"
+    )
 
 
 def _external_purl(record: dict[str, Any]) -> str | None:
