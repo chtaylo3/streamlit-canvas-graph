@@ -260,7 +260,9 @@ def populate_metrics(connection: duckdb.DuckDBPyConnection, snapshot_id: str) ->
         ]
         placeholders = ",".join("?" for _ in dep_ids) or "NULL"
         direct = connection.execute(
-            "SELECT count(*) FROM edges WHERE snapshot_id = ? AND source_id = ? AND edge_type = 'depends_on'",
+            """SELECT count(DISTINCT target_id) FROM edges
+               WHERE snapshot_id = ? AND source_id = ?
+                 AND edge_type IN ('depends_on', 'optional_depends_on', 'peer_requires')""",
             [snapshot_id, node_id],
         ).fetchone()[0]
         values: list[tuple[str, str, int]] = [

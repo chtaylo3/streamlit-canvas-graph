@@ -198,10 +198,20 @@ Dependency identity is stable across repositories within a snapshot by
 ecosystem, normalized package name, and resolved version. Each snapshot is also
 exported as table-oriented Parquet under `parquet/<snapshot_uuid>/`.
 
-Manifest-to-package `depends_on` edges identify declared direct dependencies.
-The separate `resolves` edge anchors a parsed dependency component to its source
-manifest when the parser cannot identify a direct declaration; it conveys
-provenance, not direct-dependency status. Ingestion resolves each repository's
+Manifest-to-package edges identify declared direct dependencies. Ordinary and
+development requirements use `depends_on`; optional requirements use
+`optional_depends_on`. npm package-to-package relationships retain each
+installation location long enough to apply Node's nearest-`node_modules`
+resolution rules before packages are collapsed to stable name/version identity.
+`peerDependencies` use the distinct `peer_requires` relationship because they
+describe host compatibility rather than package ownership. Edge metadata records
+the requested range, relationship kind, optionality, and available source and
+target installation locations.
+
+The separate `resolves` edge is a final provenance fallback. It anchors only a
+dependency component that remains disconnected after ordinary, optional, and
+peer relationships have been processed; it conveys provenance, not
+direct-dependency status. Ingestion resolves each repository's
 default branch to an immutable commit SHA and stores SHA-256 hashes for parsed
 manifest and SBOM content. A snapshot is rolled back if any dependency remains
 unreachable from a manifest before metrics and exports are finalized.
