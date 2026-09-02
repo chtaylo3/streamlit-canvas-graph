@@ -59,10 +59,17 @@ def parse_package_lock(path: str, content: str) -> ParsedManifest:
     payload = json.loads(content)
     packages: list[Package] = []
     entries = payload.get("packages", {})
-    root_dependencies = set(payload.get("dependencies", {}))
     root = entries.get("", {})
-    root_dependencies.update(root.get("dependencies", {}))
-    root_dependencies.update(root.get("devDependencies", {}))
+    root_dependencies = {
+        name
+        for group in ("dependencies", "devDependencies", "optionalDependencies")
+        for name in root.get(group, {})
+    }
+    # Root peerDependencies describe host compatibility rather than an installed
+    # dependency owned by this application, so they are intentionally excluded.
+    # The top-level `dependencies` tree is lockfile-v1 compatibility data in
+    # modern lockfiles and must not be used when the authoritative root package
+    # entry exists.
     for location, record in entries.items():
         if not location or "version" not in record:
             continue
@@ -76,7 +83,7 @@ def parse_package_lock(path: str, content: str) -> ParsedManifest:
                 name,
                 str(record["version"]),
                 "npm",
-                name in root_dependencies,
+                name in root_dependencies and location == f"node_modules/{name}",
                 dependencies,
             )
         )
