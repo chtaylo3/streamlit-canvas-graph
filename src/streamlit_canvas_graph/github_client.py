@@ -128,6 +128,9 @@ class GitHubClient:
     def license(self, full_name: str) -> dict[str, Any]:
         return self.get(f"/repos/{full_name}/license")
 
+    def commit_sha(self, full_name: str, ref: str) -> str:
+        return str(self.get(f"/repos/{full_name}/commits/{ref}")["sha"])
+
     def tree(self, full_name: str, ref: str) -> list[dict[str, Any]]:
         payload = self.get(
             f"/repos/{full_name}/git/trees/{ref}", params={"recursive": "1"}

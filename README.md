@@ -202,3 +202,11 @@ The normalized contract contains `snapshots`, `nodes`, `edges`,
 Dependency identity is stable across repositories within a snapshot by
 ecosystem, normalized package name, and resolved version. Each snapshot is also
 exported as table-oriented Parquet under `parquet/<snapshot_uuid>/`.
+
+Manifest-to-package `depends_on` edges identify declared direct dependencies.
+The separate `resolves` edge anchors a parsed dependency component to its source
+manifest when the parser cannot identify a direct declaration; it conveys
+provenance, not direct-dependency status. Ingestion resolves each repository's
+default branch to an immutable commit SHA and stores SHA-256 hashes for parsed
+manifest and SBOM content. A snapshot is rolled back if any dependency remains
+unreachable from a manifest before metrics and exports are finalized.

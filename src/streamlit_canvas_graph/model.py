@@ -16,6 +16,7 @@ class EdgeType(StrEnum):
     OWNS = "owns"
     CONTAINS = "contains"
     DEPENDS_ON = "depends_on"
+    RESOLVES = "resolves"
 
 
 SEVERITIES = ("critical", "high", "medium", "low")
