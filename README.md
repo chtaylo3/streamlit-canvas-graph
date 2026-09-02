@@ -1,4 +1,4 @@
-# GitHub Dependency Explorer
+# Streamlit Graph Canvas dependency explorer
 
 A Streamlit application for browsing GitHub accounts, repositories, manifests,
 direct dependencies, and transitive dependencies without rendering an entire
@@ -76,13 +76,17 @@ example secrets file.
 
 - Account → repository → manifest → shared dependency navigation.
 - Two ancestor levels and one descendant level around the focused node.
+- Ancestors outside the active breadcrumb trail are dimmed while the active
+  lineage and immediate descendant edges remain emphasized.
 - A hard 500-node canvas limit with explicit truncation messaging.
-- First-party React Flow canvas with ELK layered layout, pan/zoom, controls,
-  minimap, keyboard-selectable nodes, and separate node/thumbnail targets.
+- The reusable `streamlit-graph-canvas==0.1.0rc1` component supplies the typed
+  graph contract, React Flow canvas, ELK layout, pan/zoom, controls, minimap,
+  keyboard navigation, and validated selection state.
+- `streamlit-graph-canvas-contrib==0.1.0rc1` supplies explicitly enabled
+  connection-count badges without application-owned JavaScript.
 - Node metadata or enlarged ring details in the right panel.
 - Snapshot history, global node search, manual refresh, severity cards, and a
   filterable vulnerability table.
-- Plotly fallback canvas if the committed frontend bundle is unavailable.
 
 The concentric rings use fixed semantics: direct/transitive on the inner ring,
 major/minor/patch updates in the middle, and critical/high/medium/low findings
@@ -181,19 +185,10 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
-The committed production frontend lets app users run with Python alone.
-Frontend development additionally requires Node.js 22 or newer:
-
-```bash
-cd frontend
-npm install
-npm test
-npm run build
-npm audit --audit-level=high
-```
-
-The Vite build writes directly to
-`src/streamlit_canvas_graph/frontend/`, which is included in the Python wheel.
+The application consumes the pinned `streamlit-graph-canvas` and
+`streamlit-graph-canvas-contrib` wheels from PyPI. Their packaged frontend and
+renderer assets mean this example requires no local Node.js build. Update both
+pins together because the prerelease renderer contract is versioned as a pair.
 
 ## Data model
 

@@ -9,7 +9,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from streamlit_canvas_graph.canvas import canvas_available, dependency_canvas
+from streamlit_canvas_graph.canvas import dependency_canvas
 from streamlit_canvas_graph.database import create_demo_dataset, snapshot_rows
 from streamlit_canvas_graph.graph import (
     bounded_neighborhood,
@@ -27,12 +27,6 @@ from streamlit_canvas_graph.thumbnails import COLORS
 
 st.set_page_config(page_title="Dependency Explorer", page_icon="◉", layout="wide")
 
-TYPE_COLORS = {
-    "account": "#0f172a",
-    "repository": "#2563eb",
-    "manifest": "#7c3aed",
-    "dependency": "#0891b2",
-}
 EXPLORE_LABELS = {
     "repository": "Repositories",
     "manifest": "Manifests",
@@ -60,66 +54,6 @@ def graph_for_snapshot(path: str, snapshot_id: str) -> nx.DiGraph:
         return load_graph(con, snapshot_id)
     finally:
         con.close()
-
-
-def graph_figure(graph: nx.DiGraph, focus_id: str | None) -> go.Figure:
-    if not graph:
-        return go.Figure()
-    generations = (
-        list(nx.topological_generations(graph))
-        if nx.is_directed_acyclic_graph(graph)
-        else []
-    )
-    if generations:
-        positions: dict[str, tuple[float, float]] = {}
-        for column, generation in enumerate(generations):
-            for row, node_id in enumerate(generation):
-                positions[node_id] = (column * 2.5, -row * 1.6 + len(generation) * 0.8)
-    else:
-        positions = nx.spring_layout(graph, seed=7)
-    edge_x: list[float | None] = []
-    edge_y: list[float | None] = []
-    for source, target in graph.edges:
-        edge_x.extend((positions[source][0], positions[target][0], None))
-        edge_y.extend((positions[source][1], positions[target][1], None))
-    edges = go.Scatter(
-        x=edge_x,
-        y=edge_y,
-        mode="lines",
-        line={"color": "#cbd5e1", "width": 1.5},
-        hoverinfo="skip",
-    )
-    nodes = list(graph.nodes)
-    node_trace = go.Scatter(
-        x=[positions[node][0] for node in nodes],
-        y=[positions[node][1] for node in nodes],
-        mode="markers+text",
-        customdata=nodes,
-        text=[graph.nodes[node]["name"] for node in nodes],
-        textposition="bottom center",
-        hovertemplate="<b>%{text}</b><br>%{meta}<extra></extra>",
-        meta=[graph.nodes[node]["node_type"] for node in nodes],
-        marker={
-            "size": [34 if node == focus_id else 25 for node in nodes],
-            "color": [
-                TYPE_COLORS.get(graph.nodes[node]["node_type"], "#64748b")
-                for node in nodes
-            ],
-            "line": {"color": "#f8fafc", "width": 3},
-        },
-    )
-    figure = go.Figure([edges, node_trace])
-    figure.update_layout(
-        height=590,
-        margin={"l": 10, "r": 10, "t": 20, "b": 10},
-        paper_bgcolor="#f8fafc",
-        plot_bgcolor="#f8fafc",
-        showlegend=False,
-        dragmode="pan",
-        xaxis={"visible": False},
-        yaxis={"visible": False, "scaleanchor": "x", "scaleratio": 1},
-    )
-    return figure
 
 
 def ring_figure(metrics: dict[str, dict[str, int]]) -> go.Figure:
@@ -338,51 +272,20 @@ def main() -> None:
             st.info(
                 f"Showing the highest-priority 500 nodes; {hidden} additional nodes are hidden. Use search or filters to refocus."
             )
-        if canvas_available():
-            event = dependency_canvas(
-                visible,
-                focus_id,
-                data_root,
-                dimmed_ids=dimmed_ancestors,
-                emphasized_edges=emphasized_edges,
-                key=f"graph-{snapshot_id}",
+        result = dependency_canvas(
+            visible,
+            dimmed_ids=dimmed_ancestors,
+            emphasized_edges=emphasized_edges,
+            key=f"graph-{snapshot_id}",
+        )
+        clicked = result.selected_node_ids[-1] if result.selected_node_ids else None
+        if clicked in graph and clicked != st.session_state.get("selected_id"):
+            select_node(
+                clicked,
+                node_type=graph.nodes[clicked]["node_type"],
+                repository_id=repository_scope(graph, clicked, current_repository),
             )
-            if event and event.get("nonce") != st.session_state.get("canvas_nonce"):
-                st.session_state.canvas_nonce = event["nonce"]
-                clicked = event.get("nodeId")
-                if clicked in graph:
-                    select_node(
-                        clicked,
-                        panel="ring"
-                        if event.get("kind") == "thumbnail_select"
-                        else "metadata",
-                        node_type=graph.nodes[clicked]["node_type"],
-                        repository_id=repository_scope(
-                            graph, clicked, current_repository
-                        ),
-                    )
-                    st.rerun()
-        else:
-            event = st.plotly_chart(
-                graph_figure(visible, focus_id),
-                use_container_width=True,
-                config={"scrollZoom": True, "displaylogo": False},
-                on_select="rerun",
-                selection_mode="points",
-                key=f"graph-{snapshot_id}",
-            )
-            points = event.selection.points if event and event.selection else []
-            if points and points[0].get("customdata") in graph:
-                clicked = points[0]["customdata"]
-                if clicked != st.session_state.get("selected_id"):
-                    select_node(
-                        clicked,
-                        node_type=graph.nodes[clicked]["node_type"],
-                        repository_id=repository_scope(
-                            graph, clicked, current_repository
-                        ),
-                    )
-                    st.rerun()
+            st.rerun()
         st.caption(
             "Click a node to refocus. The canvas shows two levels toward ancestors and one toward descendants."
         )
